@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Amoo Bridge for Mac</title>
+<style>
+  :root{
+    --cream:#FAF4EA; --paper:#FFFCF7; --ink:#25201B; --muted:#6B5F55;
+    --line:#E6DACA; --green:#2F6B4F; --green-deep:#255741; --green-mist:#E8F0E9;
+    --terra:#B96A42; --amber:#B8862B; --sand:#EFE7DA;
+    --font:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--cream);color:var(--ink);font-family:var(--font);font-size:14px;line-height:1.65;-webkit-font-smoothing:antialiased}
+  .app{height:100%;display:flex;flex-direction:column;overflow:hidden}
+
+  /* header */
+  .head{flex:0 0 auto;padding:18px 28px 14px;display:flex;align-items:baseline;gap:14px;border-bottom:1px solid var(--line)}
+  .brand{font-size:24px;font-weight:800;letter-spacing:-.02em;margin:0}
+  .sub{color:var(--muted);font-size:13px}
+  .ver{margin-left:auto;color:var(--muted);font-size:12px;font-family:var(--mono)}
+
+  /* status cards */
+  .stats{flex:0 0 auto;display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:16px 28px 4px}
+  .stat{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:12px 16px;display:flex;gap:10px;align-items:flex-start}
+  .dot{width:9px;height:9px;border-radius:50%;background:#A9A094;margin-top:7px;flex:0 0 auto}
+  .dot.on{background:var(--green)} .dot.warn{background:var(--amber)}
+  .stat .k{color:var(--muted);font-size:12px}
+  .stat .v{font-size:15px;font-weight:650;margin-top:1px}
+  .stat .note{color:var(--muted);font-size:12px;margin-top:2px}
+
+  /* body */
+  .main{flex:1 1 auto;display:flex;gap:0;padding:16px 28px 24px;min-height:0}
+  .nav{flex:0 0 132px;background:var(--sand);border-radius:12px 0 0 12px;padding:10px 0;display:flex;flex-direction:column}
+  .nav button{appearance:none;border:0;background:transparent;text-align:left;font:inherit;color:var(--ink);padding:11px 20px;cursor:pointer;font-size:14px}
+  .nav button:hover{background:rgba(255,255,255,.45)}
+  .nav button.active{background:var(--paper);font-weight:700;box-shadow:inset 3px 0 0 var(--green)}
+  .panel{flex:1 1 auto;background:var(--paper);border:1px solid var(--line);border-left:0;border-radius:0 12px 12px 0;padding:22px 26px;overflow-y:auto}
+  .page{display:none} .page.active{display:block}
+
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+  .btn{appearance:none;border:1px solid var(--line);background:var(--sand);color:var(--ink);font:inherit;font-size:13px;padding:9px 16px;border-radius:8px;cursor:pointer}
+  .btn:hover{filter:brightness(.97)}
+  .btn.primary{background:var(--green);border-color:var(--green);color:#fff;font-weight:600}
+  .btn.primary:hover{background:var(--green-deep)}
+  .btn:active{transform:translateY(1px)}
+  .btn.small{padding:6px 12px;font-size:12px}
+
+  .card{border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px;background:#fff}
+  .card h2{margin:0 0 6px;font-size:17px}
+  .card h2 .tag{display:inline-block;vertical-align:2px;margin-left:8px;font-size:11px;font-weight:600;color:var(--green-deep);background:var(--green-mist);border-radius:5px;padding:2px 8px}
+  .card p{margin:0 0 10px;color:var(--muted)}
+  ol{margin:8px 0 0;padding-left:20px;color:var(--ink)} ol li{margin:4px 0}
+  .hint{color:var(--muted);font-size:12.5px;margin-top:12px}
+
+  /* model rows */
+  .row{display:flex;align-items:center;gap:12px;margin:12px 0}
+  .row label{flex:0 0 92px;color:var(--muted);font-size:13px}
+  .row .val{flex:1 1 auto;background:var(--cream);border:1px solid var(--line);border-radius:7px;padding:8px 12px;font-family:var(--mono);font-size:13px;overflow-x:auto;white-space:nowrap}
+  .row .btn{flex:0 0 auto}
+  .result{margin-top:12px;border-radius:8px;padding:12px 14px;font-size:13px;white-space:pre-wrap;display:none;word-break:break-word}
+  .result.show{display:block}
+  .result.ok{background:var(--green-mist);color:var(--green-deep);border:1px solid #cfe0d3}
+  .result.bad{background:#FBEDE7;color:#8C3D24;border:1px solid #EBCFC2}
+  .statusbox{margin-top:12px;border-radius:8px;padding:12px 14px;font-size:13px;background:var(--cream);border:1px solid var(--line);color:var(--ink)}
+  .statusbox.ok{background:var(--green-mist);color:var(--green-deep);border-color:#cfe0d3}
+  .statusbox.warn{background:#FBF3E2;color:#8A6416;border-color:#EBDCB8}
+
+  /* settings */
+  .field{margin:14px 0}
+  .field label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
+  .field input[type=text],.field input[type=number]{width:100%;max-width:460px;background:var(--cream);border:1px solid var(--line);border-radius:7px;padding:9px 12px;font:inherit;font-size:13px;font-family:var(--mono);color:var(--ink)}
+  .field input:focus{outline:2px solid rgba(47,107,79,.35);outline-offset:1px}
+  .check{display:flex;align-items:center;gap:8px;font-size:13px;margin:16px 0}
+  .field .tip{font-size:12px;color:var(--muted);margin-top:5px}
+
+  /* toast */
+  #toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(16px);opacity:0;pointer-events:none;background:var(--ink);color:#fff;font-size:13px;padding:9px 18px;border-radius:999px;transition:opacity .2s,transform .2s;z-index:99;max-width:80%;text-align:center}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="head">
+    <h1 class="brand">Amoo Bridge <span style="font-weight:500;color:var(--muted);font-size:15px">for Mac</span></h1>
+    <span class="sub">本机网关 · OpenAI 兼容 · 独立实现（非官方）</span>
+    <span class="ver" id="ver">v1.0.0</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <span class="dot" id="deviceDot"></span>
+      <div><div class="k">设备端</div><div class="v" id="deviceVal">加载中…</div><div class="note" id="deviceNote"></div></div>
+    </div>
+    <div class="stat">
+      <span class="dot" id="gwDot"></span>
+      <div><div class="k">网关</div><div class="v" id="gwVal">加载中…</div><div class="note" id="gwNote"></div></div>
+    </div>
+  </div>
+
+  <div class="main">
+    <nav class="nav">
+      <button data-page="connect" class="active">连接</button>
+      <button data-page="model">模型</button>
+      <button data-page="settings">设置</button>
+    </nav>
+    <div class="panel">
+
+      <!-- 连接 -->
+      <section class="page active" id="page-connect">
+        <div class="toolbar">
+          <button class="btn primary" id="toggleBtn" onclick="toggleGw()">启动网关</button>
+          <button class="btn" onclick="go('model')">下一步：填模型</button>
+          <button class="btn" onclick="go('connect');document.getElementById('card-guide').scrollIntoView({behavior:'smooth'})">不会用？看三步向导</button>
+        </div>
+
+        <div class="card" id="card-guide">
+          <h2>连上之后</h2>
+          <p>三步走完，本机网关就能被任何 OpenAI 兼容客户端使用。</p>
+          <ol>
+            <li>点「下一步：填模型」，复制页面上的三行配置。</li>
+            <li>在 Chatbox / Cherry Studio / WorkBuddy 里新建一个 OpenAI 兼容模型，粘贴进去。</li>
+            <li>这个窗口可以关掉，网关会在状态栏继续运行。</li>
+          </ol>
+        </div>
+
+        <div class="card">
+          <h2>USB 自动连接 <span class="tag" id="modeTag">演示模式</span></h2>
+          <p>用数据线把手机接到这台 Mac 并开启 USB 调试。应用每 3 秒检测一次，插入后自动完成：<strong>识别设备 → adb 建立通道 → 由手机上的 Amoo App 自己发消息并读回回复</strong>，不用手动点连接。</p>
+          <div class="statusbox" id="usbStatus">正在检测 USB 设备…</div>
+          <p style="margin-top:14px">消息不走手机的本地网关端口（会被 Amoo 拦截），而是让 Amoo 自己发。<strong>锁屏 / 息屏也能发</strong>：应用会自动唤醒屏幕、打开 Amoo 的锁屏聊天卡片，由它发送并读回回复，不需要 PIN、不需要解锁；已解锁时走普通聊天页。全过程不用手动点手机，失败会返回明确错误，不假装成功。</p>
+          <div class="hint">仅监听 127.0.0.1。adb 路径自动探测，找不到会在上方提示。拔线后自动清理通道，重新插入会自动重连。</div>
+        </div>
+      </section>
+
+      <!-- 模型 -->
+      <section class="page" id="page-model">
+        <div class="card">
+          <h2>模型配置 <span class="tag">普通用户用这个</span></h2>
+          <p>把下面三行填到聊天软件里就能用了。支持 OpenAI 兼容接口的客户端都行：Chatbox、Cherry Studio、WorkBuddy 等。</p>
+          <div class="row"><label>Base URL</label><div class="val" id="v-base">—</div><button class="btn small" onclick="cp('v-base')">复制</button></div>
+          <div class="row"><label>API Key</label><div class="val" id="v-key">—</div><button class="btn small" onclick="cp('v-key')">复制</button></div>
+          <div class="row"><label>模型</label><div class="val" id="v-model">—</div><button class="btn small" onclick="cp('v-model')">复制</button></div>
+          <div class="hint">端口若被占用会自动顺延，以顶部「网关」卡片显示的端口为准。</div>
+        </div>
+
+        <div class="card">
+          <h2>测试一下</h2>
+          <p>点一下，会通过本机网关发一条消息，当场验证整条链路是否通。</p>
+          <div class="row" style="margin-top:4px">
+            <input type="text" id="testInput" value="你好" style="flex:1 1 auto;background:var(--cream);border:1px solid var(--line);border-radius:7px;padding:9px 12px;font:inherit;font-size:13px" onkeydown="if(event.key==='Enter')sendTest()">
+            <button class="btn primary" onclick="sendTest()">发一条测试消息</button>
+          </div>
+          <div class="result" id="testResult"></div>
+        </div>
+      </section>
+
+      <!-- 设置 -->
+      <section class="page" id="page-settings">
+        <div class="card">
+          <h2>启动与连接</h2>
+          <p>决定打开软件时做什么。模型地址在「模型」页，不在这里。</p>
+          <div class="field"><label>端口（被占用时自动顺延）</label><input type="number" id="f-port" min="1" max="65535" value="8788"></div>
+          <div class="field"><label>API Key</label><input type="text" id="f-key" value="sk-amoo"></div>
+          <div class="field"><label>模型名</label><input type="text" id="f-model" value="amoo-phone"></div>
+          <div class="field">
+            <label>手机端服务端口（需与手机端实际一致）</label>
+            <input type="number" id="f-phone" min="1" max="65535" value="8080">
+            <div class="tip">仅用于 adb 建立通道；实际消息由 Amoo App 自己发送，不依赖该端口的服务。</div>
+          </div>
+          <div class="field">
+            <label>adb 路径（可选，留空自动探测）</label>
+            <input type="text" id="f-adb" placeholder="例如 /usr/local/bin/adb">
+            <div class="tip" id="adbTip">未找到 adb 时安装 Android platform-tools，并把路径填到这里。</div>
+          </div>
+          <div class="field">
+            <label>手动设备端上游地址（可选，USB 自动连接优先）</label>
+            <input type="text" id="f-upstream" placeholder="留空 = 演示模式，不接真实设备">
+            <div class="tip">不使用 USB 时的备用转发地址，例如 http://127.0.0.1:8080/v1。</div>
+          </div>
+          <label class="check"><input type="checkbox" id="f-autoconnect" checked> USB 接入手机时自动连接</label>
+          <label class="check"><input type="checkbox" id="f-autostart" checked> 打开软件时自动启动网关</label>
+          <div class="toolbar" style="margin:18px 0 0">
+            <button class="btn primary" onclick="save()">保存设置</button>
+            <button class="btn" onclick="go('connect')">返回连接页</button>
+          </div>
+          <div class="result" id="saveResult"></div>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+  var S = {};
+  function bridge(msg){ window.webkit.messageHandlers.bridge.postMessage(msg); }
+  function $(id){ return document.getElementById(id); }
+  function go(p){
+    document.querySelectorAll('.nav button').forEach(function(b){ b.classList.toggle('active', b.dataset.page===p); });
+    document.querySelectorAll('.page').forEach(function(s){ s.classList.toggle('active', s.id==='page-'+p); });
+  }
+  document.querySelectorAll('.nav button').forEach(function(b){ b.onclick=function(){ go(b.dataset.page); }; });
+
+  function toast(t){
+    var el=$('toast'); el.textContent=t; el.classList.add('show');
+    clearTimeout(window.__tt); window.__tt=setTimeout(function(){ el.classList.remove('show'); },1800);
+  }
+  function showResult(id, ok, text){
+    var el=$(id); el.className='result show '+(ok?'ok':'bad'); el.textContent=text;
+  }
+  function cp(id){ var t=$(id).textContent.trim(); bridge({action:'copy',text:t}); }
+  function toggleGw(){ bridge({action:S.running?'stop':'start'}); }
+  function sendTest(){
+    var t=$('testInput').value.trim()||'你好';
+    showResult('testResult',true,'正在通过本机网关发送…');
+    bridge({action:'test',text:t});
+  }
+  function save(){
+    bridge({action:'save',
+      port:parseInt($('f-port').value,10)||8788,
+      apiKey:$('f-key').value.trim(),
+      model:$('f-model').value.trim(),
+      upstream:$('f-upstream').value.trim(),
+      autoStart:$('f-autostart').checked,
+      autoConnect:$('f-autoconnect').checked,
+      phonePort:parseInt($('f-phone').value,10)||8080,
+      adbPath:$('f-adb').value.trim()});
+  }
+
+  window.onNative = function(s){
+    S=s;
+    $('ver').textContent='v'+s.version;
+    var base='http://127.0.0.1:'+(s.port||s.configuredPort)+'/v1';
+    $('v-base').textContent=base;
+    $('v-key').textContent=s.apiKey;
+    $('v-model').textContent=s.model;
+    $('f-port').value=s.configuredPort; $('f-key').value=s.apiKey; $('f-model').value=s.model;
+    $('f-upstream').value=s.manualUpstream; $('f-autostart').checked=s.autoStart;
+    $('f-phone').value=s.phonePort; $('f-adb').value=s.adbPath;
+    $('f-autoconnect').checked=s.autoConnect;
+    $('adbTip').textContent=s.adbFound?('已探测到 adb：'+s.adbDetectedPath):'未找到 adb：安装 Android platform-tools，并把路径填到这里。';
+    $('toggleBtn').textContent=s.running?'停止网关':'启动网关';
+    $('toggleBtn').classList.toggle('primary',!s.running);
+
+    // 网关状态
+    $('gwDot').className='dot'+(s.running?' on':'');
+    $('gwVal').textContent=s.running?('运行中 · 端口 '+s.port):'已停止';
+    $('gwNote').textContent=s.running?('已处理 '+s.requestCount+' 个请求 · 仅监听 127.0.0.1'):'点左上角「启动网关」开始';
+
+    // 设备端状态：绝不伪造「已连接手机」
+    var tag=$('modeTag'), d=$('deviceDot'), box=$('usbStatus');
+    if(s.mode==='usb'){
+      d.className='dot '+(s.upstreamOK?'on':'warn');
+      $('deviceVal').textContent=s.upstreamOK?'USB 已连接 · Amoo 已就绪':'USB 已连接 · adb 未连接';
+      $('deviceNote').textContent=s.serial+' · ADB 驱动 Amoo 发消息（锁屏可用）';
+      tag.textContent='Amoo 实机模式';
+      box.className='statusbox '+(s.upstreamOK?'ok':'warn');
+      box.textContent=s.deviceMessage+(s.upstreamOK?' · 锁屏/亮屏均可发消息':' · 检查 USB 调试授权');
+    }else if(s.mode==='upstream'){
+      d.className='dot '+(s.upstreamOK?'on':'warn');
+      $('deviceVal').textContent=s.upstreamOK?'手动上游 可达':'手动上游 不可达 · 重试中';
+      $('deviceNote').textContent=s.upstream;
+      tag.textContent='手动转发模式';
+      box.className='statusbox '+(s.upstreamOK?'ok':'warn');
+      box.textContent=s.deviceMessage;
+    }else{
+      d.className='dot'+(s.usbPlugged?' warn':'');
+      $('deviceVal').textContent=s.usbPlugged?'已插入 USB 设备 · 未连通':'演示模式 · 未接入设备';
+      $('deviceNote').textContent=s.deviceMessage;
+      tag.textContent='演示模式';
+      box.className='statusbox'+(s.adbFound?'':' warn');
+      box.textContent=s.deviceMessage;
+    }
+  };
+
+  window.onEvent = function(e){
+    if(e.type==='copy') toast(e.text);
+    else if(e.type==='test') showResult('testResult',true,e.text);
+    else if(e.type==='testResult') showResult('testResult',e.ok,e.text);
+    else if(e.type==='save'){ showResult('saveResult',e.ok,e.text); toast(e.text); }
+    else if(e.type==='gateway'){ toast(e.text); }
+    else if(e.type==='upstream'){ toast(e.text); }
+    else if(e.type==='usb'){ toast(e.text); }
+  };
+
+  bridge({action:'ready'});
+</script>
+</body>
+</html>

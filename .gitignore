@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# 第三方 Android SDK 平台工具（约 35MB 二进制，从官方 platform-tools 重新下载即可）
+tools/platform-tools/
+
+# 构建产物（保留 dist 目录本身，产物不纳入版本库）
+dist/*
+!dist/.gitkeep
+
+# 本地开发说明（技术细节只留在本地，仓库只放精简 README）
+DEVELOPMENT.md
+
+# WorkBuddy 本地工作数据（非临时缓存，但不纳入版本库）
+.workbuddy/
