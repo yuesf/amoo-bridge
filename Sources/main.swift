@@ -388,14 +388,37 @@ final class Gateway {
 
     // Agent 客户端会把完整系统提示 + 工具定义 + 会话历史塞进一条消息（可达十几万字符）。
     // 手机 Amoo 是聊天输入框，只应该收到用户真正说的那句话。
+    //
+    // 电脑文件注入预算：am broadcast 对超长文本会直接失败（Driver 侧实测），
+    // 上限宁小勿大；若手机端实测能接受更长文本，可适当调高 kMaxTotalChars。
+    private static let kMaxQuestionChars = 1000    // 用户问题本身的上限（与旧行为一致）
+    private static let kMaxTotalChars = 8000       // 文件内容 + 问题 的总上限
+    private static let kMaxFileBytes = 16 * 1024   // 单个文件最多读取的字节数
+    private static let kMaxInlineFiles = 3         // 一次最多内嵌的文件数
+
     private func userText(from messages: [[String: Any]]) -> (String, Bool) {
         // 逐条取出所有文本：客户端内部请求不一定带 role，指令也不一定在第一条
         var texts: [String] = []
+        var fileParts: [(name: String, data: Data)] = []
+        var imageCount = 0
         for m in messages {
             if let s = m["content"] as? String, !s.isEmpty { texts.append(s); continue }
             if let arr = m["content"] as? [[String: Any]] {
-                for part in arr where (part["type"] as? String) == "text" {
-                    if let s = part["text"] as? String, !s.isEmpty { texts.append(s) }
+                for part in arr {
+                    switch part["type"] as? String ?? "" {
+                    case "text":
+                        if let s = part["text"] as? String, !s.isEmpty { texts.append(s) }
+                    case "file":
+                        // OpenAI 兼容格式：part.file 里可能带 file_data（data URI / base64）
+                        if let f = part["file"] as? [String: Any] {
+                            let name = (f["filename"] as? String)
+                                ?? (f["file_id"] as? String) ?? "attachment"
+                            if let d = decodeFilePart(f) { fileParts.append((name, d)) }
+                        }
+                    case "image_url", "image":
+                        imageCount += 1
+                    default: break
+                    }
                 }
             }
         }
@@ -409,9 +432,13 @@ final class Gateway {
             guard (m["role"] as? String) == "user" else { continue }
             if let s = m["content"] as? String, !s.isEmpty { raw = s; break }
             if let arr = m["content"] as? [[String: Any]] {
-                for part in arr where (part["type"] as? String) == "text" {
-                    if let s = part["text"] as? String, !s.isEmpty { raw = s; break }
+                // 同一条消息可能被客户端拆成多个 text part，拼起来才算完整输入
+                let parts = arr.compactMap { p -> String? in
+                    guard (p["type"] as? String) == "text",
+                          let s = p["text"] as? String, !s.isEmpty else { return nil }
+                    return s
                 }
+                raw = parts.joined(separator: "\n")
                 if !raw.isEmpty { break }
             }
         }
@@ -431,8 +458,92 @@ final class Gateway {
               let b = raw.range(of: "</system-reminder>", range: a.upperBound..<raw.endIndex) {
             raw.removeSubrange(a.lowerBound..<b.upperBound)
         }
-        if raw.count > 1000 { raw = String(raw.suffix(1000)) }
-        return (raw.trimmingCharacters(in: .whitespacesAndNewlines), false)
+
+        if raw.count > Gateway.kMaxQuestionChars { raw = String(raw.suffix(Gateway.kMaxQuestionChars)) }
+        let question = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // ---- 电脑文件注入 ----
+        // Amoo 只有手机侧的文件能力，桌面客户端消息里引用的电脑文件，
+        // 由网关读出内容、以内嵌文本随消息发出。Amoo 收到的就是纯文本，
+        // 不再把「读这个文件」理解成去手机存储里找。
+        var blocks: [String] = fileParts.prefix(Gateway.kMaxInlineFiles).map { fileBlock(name: $0.name, data: $0.data) }
+        if blocks.count < Gateway.kMaxInlineFiles {
+            for path in detectFilePaths(in: raw) {
+                if blocks.count >= Gateway.kMaxInlineFiles { break }
+                if let b = inlineFileBlock(path) { blocks.append(b) }
+            }
+        }
+        if imageCount > 0 {
+            blocks.append("[客户端消息里还附带了 \(imageCount) 张图片，本网关无法把图片传给 Amoo。]")
+        }
+
+        // 预算分配：先保住问题本身，剩余空间给文件内容，超了就截断文件块
+        var kept: [String] = []
+        var budget = Gateway.kMaxTotalChars - question.count - 2
+        for b in blocks {
+            var blk = b
+            guard budget > 200 else { break }
+            if blk.count > budget { blk = String(blk.prefix(budget)) + "…" }
+            kept.append(blk)
+            budget -= blk.count + 2
+        }
+        let body = kept.joined(separator: "\n\n")
+        let out = body.isEmpty ? question : body + "\n\n" + question
+        return (out, false)
+    }
+
+    // MARK: - 电脑文件注入工具
+
+    // OpenAI 兼容 file part：file_data 是 data URI（data:...;base64,...）或裸 base64
+    private func decodeFilePart(_ f: [String: Any]) -> Data? {
+        guard let raw = (f["file_data"] as? String) ?? (f["data"] as? String),
+              !raw.isEmpty else { return nil }
+        if raw.hasPrefix("data:") {
+            guard let comma = raw.range(of: ",") else { return nil }
+            return Data(base64Encoded: String(raw[comma.upperBound...]),
+                        options: .ignoreUnknownCharacters)
+        }
+        return Data(base64Encoded: raw, options: .ignoreUnknownCharacters)
+    }
+
+    // 从用户文本里找绝对路径（macOS 常见前缀 / ~ / Windows 盘符），
+    // 只保留真实存在且可读的文件，避免把普通文字误判成路径。
+    private func detectFilePaths(in text: String) -> [String] {
+        let pattern = "(?<![A-Za-z0-9_])((?:/(?:Users|tmp|var|private|Volumes|opt|home|Applications)"
+            + "|~|[A-Za-z]:)[/\\\\][^\\s\"'`<>|，。；！？：（）\\[\\]【】]{1,240})"
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = text as NSString
+        var found: [String] = []
+        for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            var p = ns.substring(with: m.range(at: 1))
+            while let last = p.last, ".,;:!)，。；！？）".contains(last) { p.removeLast() }
+            guard !p.isEmpty, !found.contains(p) else { continue }
+            var full = p
+            if full.hasPrefix("~") { full = (full as NSString).expandingTildeInPath }
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: full, isDirectory: &isDir),
+               !isDir.boolValue, FileManager.default.isReadableFile(atPath: full) {
+                found.append(p)
+            }
+        }
+        return found
+    }
+
+    // 单个电脑文件 → 内嵌文本块；读不了/是二进制时给出说明而不是静默丢掉
+    private func inlineFileBlock(_ path: String) -> String? {
+        var full = path
+        if full.hasPrefix("~") { full = (full as NSString).expandingTildeInPath }
+        guard let data = FileManager.default.contents(atPath: full), !data.isEmpty else { return nil }
+        return fileBlock(name: path, data: Data(data))
+    }
+
+    private func fileBlock(name: String, data: Data) -> String {
+        let clipped = data.prefix(Gateway.kMaxFileBytes)
+        let note = data.count > Gateway.kMaxFileBytes ? "，文件较大已截取前面部分" : ""
+        if let s = String(data: Data(clipped), encoding: .utf8), !s.isEmpty {
+            return "[以下是电脑上的文件 \(name) 的内容\(note)：\n<file_content>\n\(s)\n</file_content>]"
+        }
+        return "[电脑文件 \(name)]（\(data.count) 字节）是二进制内容，无法以文本内嵌。"
     }
 
     private func handleChat(_ body: Data) -> (Int, Data) {
